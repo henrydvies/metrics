@@ -1,4 +1,4 @@
-module github.com/henrydvies
+module github.com/henrydvies/metrics
 
 go 1.24.4
 
