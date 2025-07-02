@@ -47,14 +47,13 @@ func initClient(ctx context.Context) {
 	})
 }
 
-// PushCounter sends a custom counter metric to Google Cloud Monitoring, taking in metric name and the labels for the metric
-func PushCounter(ctx context.Context, metricName string, labels map[string]string) {
+// PushMetric sends a custom metric with any value type to Google Cloud Monitoring
+func PushMetric(ctx context.Context, metricName string, value interface{}, labels map[string]string) {
 	initClient(ctx) // Initialize the GCP Monitoring client
 	if metricClient == nil {
 		return // metrics disabled
 	}
 
-	// Get the project ID and function name
 	projectID := getProjectID()
 	functionName := getFunctionName()
 	now := timestamppb.New(time.Now())
@@ -65,30 +64,51 @@ func PushCounter(ctx context.Context, metricName string, labels map[string]strin
 		labels["function_name"] = functionName
 	}
 
-	// Create a point, which is the amount to increment the metric by (1 for now)
-	point := &monpb.Point{
-		Interval: &monpb.TimeInterval{EndTime: now},
-		Value:    &monpb.TypedValue{Value: &monpb.TypedValue_Int64Value{Int64Value: 1}},
+	// Create a typed value for the metric - allows for different types of values
+	var typedValue *monpb.TypedValue
+	switch v := value.(type) {
+	case int:
+		typedValue = &monpb.TypedValue{Value: &monpb.TypedValue_Int64Value{Int64Value: int64(v)}}
+	case int32:
+		typedValue = &monpb.TypedValue{Value: &monpb.TypedValue_Int64Value{Int64Value: int64(v)}}
+	case int64:
+		typedValue = &monpb.TypedValue{Value: &monpb.TypedValue_Int64Value{Int64Value: v}}
+	case float32:
+		typedValue = &monpb.TypedValue{Value: &monpb.TypedValue_DoubleValue{DoubleValue: float64(v)}}
+	case float64:
+		typedValue = &monpb.TypedValue{Value: &monpb.TypedValue_DoubleValue{DoubleValue: v}}
+	case string:
+		typedValue = &monpb.TypedValue{Value: &monpb.TypedValue_StringValue{StringValue: v}}
+	case bool:
+		var intVal int64
+		if v {
+			intVal = 1
+		}
+		typedValue = &monpb.TypedValue{Value: &monpb.TypedValue_Int64Value{Int64Value: intVal}}
+	default:
+		log.Printf("[metrics] unsupported value type: %T", v)
+		return
 	}
 
-	// Create a time series, which is the metric and the point
+	point := &monpb.Point{
+		Interval: &monpb.TimeInterval{EndTime: now},
+		Value:    typedValue,
+	}
+
 	ts := &monpb.TimeSeries{
-		// Metric is metric name and labels, labels hold the function name and the metric name for the metric
 		Metric: &mpb.Metric{
 			Type:   "custom.googleapis.com/" + metricName,
 			Labels: labels,
 		},
-		// Resource is the resource that the metric is being collected from, in this case the global resource
 		Resource: &gcprpb.MonitoredResource{
-			Type: "global", // TODO check global is best
+			Type: "global",
 			Labels: map[string]string{
-				"project_id": projectID, // No other causese global
+				"project_id": projectID,
 			},
 		},
-		// one per call atm as incrementing by 1
 		Points: []*monpb.Point{point},
 	}
-	// API call to cloud monitoring to log metric
+
 	req := &monpb.CreateTimeSeriesRequest{
 		Name:       projectName,
 		TimeSeries: []*monpb.TimeSeries{ts},
